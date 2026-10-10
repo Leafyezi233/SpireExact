@@ -4,7 +4,7 @@ Prefix IDs name exact parent + full canonical action bytes in a trie. They do
 not equate projected states or hash digests. Heap priorities only increase as
 visits increase: stale keys are lower bounds, refreshed before selection.
 """
-from collections import Counter
+from collections import Counter, deque
 from dataclasses import dataclass
 import heapq,json
 from ..canonical import canonical,ContractError
@@ -42,20 +42,28 @@ class CompactBranch:
 
 class IndexedStrategicScheduler:
     weights=StrategicScheduler.weights
-    def __init__(self,scope_prefix=None,site_cap=None):
+    def __init__(self,scope_prefix=None,site_cap=None,route_filter=None,*,recover_deferred=False):
         self.scope_length=len(scope_prefix or [])
         self.scope_bytes=canonical(scope_prefix or [])
         self.prefixes=PrefixTrie();self.seen=set();self.executed=set();self.submitted=set()
         self.counts=Counter();self.room_visits=Counter();self.source_visits=Counter()
         self.branches={};self.heaps={k:[]for k in self.weights};self.order=0;self.generated=0;self.duplicates=0
+        # Route planner constraint (route.py): at map decision sites only the
+        # planned route's next step is queued; every non-map decision stays
+        # free. A preference carved out of the branching factor, never legality.
+        self.route_filter=route_filter;self.route_filtered=0;self.route_released=False
         # Optional heuristic deferral for very wide menus (e.g. 100+ card
         # selections): only an evenly spaced subset is queued here. None keeps
         # the exact historical order; deferred options stay unresolved.
         if site_cap is not None and(type(site_cap)is not int or site_cap<1):raise ValueError('Positive site cap required')
         self.site_cap=site_cap;self.deferred=0;self.last_key=None
+        if type(recover_deferred) is not bool:raise ValueError('recover_deferred must be boolean')
+        self.recover_deferred=recover_deferred
+        self.deferred_branches={};self.deferred_order=deque();self.promoted=0
     def take(self,key):
         """Record an alternative submitted by another allocator of the same trie."""
-        self.branches.pop(key,None);self.seen.add(key);self.submitted.add(key)
+        self.branches.pop(key,None);self.deferred_branches.pop(key,None)
+        self.seen.add(key);self.submitted.add(key)
     def pending(self,key):return key not in self.executed and key not in self.submitted
     def _priority(self,b,category):
         death_floor=b.diagnosis['floor'];death_act=b.diagnosis['act']
@@ -76,8 +84,12 @@ class IndexedStrategicScheduler:
         for i,e in enumerate(evidence):
             if strategic_phase(e):
                 key=path[i+1];self.seen.add(key);self.executed.add(key);self.branches.pop(key,None)
-        room_phases=set()
+                self.deferred_branches.pop(key,None)
+        room_phases=set();map_count=0
         for i,e in enumerate(evidence):
+            # Map actions already executed before this site define the route
+            # position; candidates below never count (they are not in the prefix).
+            if i and trace[i-1].get('kind')=='map':map_count+=1
             if i<self.scope_length:continue
             category=strategic_phase(e)
             if not category:continue
@@ -87,19 +99,43 @@ class IndexedStrategicScheduler:
             room_phases.add(room)
             actions=[a for a in e.get('available_actions',[])if a.get('kind')not in('discard_potion','reward','rewards_skip')
                      and canonical(a)!=self.prefixes.actions[path[i+1]]]
+            delayed=set()
             if self.site_cap is not None and len(actions)>self.site_cap:
                 step=len(actions)/self.site_cap;self.deferred+=len(actions)-self.site_cap
-                actions=[actions[int(k*step)]for k in range(self.site_cap)]
-            for action in actions:
+                selected={int(k*step) for k in range(self.site_cap)}
+                if self.recover_deferred:
+                    delayed=set(range(len(actions)))-selected
+                else:
+                    actions=[actions[int(k*step)]for k in range(self.site_cap)]
+            for position,action in enumerate(actions):
+                if action.get('kind')=='map' and self.route_filter is not None and not self.route_filter(map_count,action):
+                    self.route_filtered+=1;continue
                 key=self.prefixes.child(path[i],action);self.generated+=1
                 if key in self.seen:self.duplicates+=1;continue
                 self.seen.add(key);self.order+=1
                 b=CompactBranch(key,i,'preparation'if action.get('kind')=='use_potion'else category,diagnosis,label,self.order,floor,act,e['phase'])
-                self.branches[key]=b
-                for cat,heap in self.heaps.items():
-                    if cat in('failure','exploration')or b.category==cat or cat=='preparation'and b.category=='resources':
-                        heapq.heappush(heap,(self._priority(b,cat),key))
+                if position in delayed:
+                    self.deferred_branches[key]=b;self.deferred_order.append(key)
+                else:self._activate(b)
+    def _activate(self,b):
+        self.branches[b.key]=b
+        for cat,heap in self.heaps.items():
+            if cat in('failure','exploration')or b.category==cat or cat=='preparation'and b.category=='resources':
+                heapq.heappush(heap,(self._priority(b,cat),b.key))
+    def promote_deferred(self):
+        """One FIFO promotion per explorer opportunity. Full prefix identity.
+
+        Counts/beam deferral are not exclusions. Finite menus are eventually
+        activated given enough explorer opportunities; no finite-budget solve
+        or coverage guarantee is made. Focus may take a deferred item first.
+        """
+        while self.deferred_order:
+            key=self.deferred_order.popleft();b=self.deferred_branches.pop(key,None)
+            if b is not None and self.pending(key):
+                self._activate(b);self.promoted+=1;return key
+        return None
     def next(self):
+        if self.recover_deferred:self.promote_deferred()
         if not self.branches:return None
         total=sum(self.counts.values())+1
         for category in sorted(self.weights,key=lambda c:self.weights[c]*total-self.counts[c],reverse=True):
@@ -116,10 +152,20 @@ class IndexedStrategicScheduler:
                 return {'prefix':self.prefixes.restore(key),'category':category,'phase':b.phase,'floor':b.floor,
                         'index':b.index,'source':b.source_label,'diagnosis':b.diagnosis}
         return None
+    def release_route_filter(self):
+        """Drop the route planner's map constraint (dp.mode force-then-search):
+        the strict prescriptions have each had their one evaluation, so the
+        continuation search walks the whole map graph instead of the top-N
+        plan's step union. The filtered count stays for the record."""
+        self.route_filter=None;self.route_released=True
     def snapshot(self):
         return {'candidates_generated':self.generated,'candidates_deduplicated':self.duplicates,
                 'pending_branches':len(self.branches),'scheduled_by_category':dict(self.counts),
                 'unique_strategic_branch_requests':len(self.submitted),'room_decision_sites':len(self.room_visits),
                 'shared_prefix_nodes':len(self.prefixes.parents),'shared_action_bytes':self.prefixes.byte_count,
                 'prefix_identity':'exact parent plus full action bytes; not state equivalence',
-                **({'site_cap':self.site_cap,'options_deferred_by_site_cap':self.deferred}if self.site_cap is not None else{})}
+            **({'recover_deferred':True,'deferred_pending':len(self.deferred_branches),
+                'deferred_promoted':self.promoted} if self.recover_deferred else {}),
+                **({'site_cap':self.site_cap,'options_deferred_by_site_cap':self.deferred}if self.site_cap is not None else{}),
+                **({'route_filtered_branches':self.route_filtered,'route_released':self.route_released}
+                   if self.route_filter is not None or self.route_released else{})}

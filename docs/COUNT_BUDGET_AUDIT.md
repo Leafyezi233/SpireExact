@@ -1,6 +1,7 @@
 # Pinned offline count-budget audit — 2026-10-01
 
-Scope: upstream commit `4d2c55069f2cf9f8c621631594857b412cf9660f`,
+Scope: upstream commit `4d2c55069f2cf9f8c621631594857b412cf9660f` (this audit),
+pinned commit since 2026-10-04 is `d7b46203593beb51f792628a2587b04f0850d1c2` (not re-audited),
 CombatSolver DLL `0af01356be8b46bce4d2d17088e83184d7205c8958c089c8d9dcaec312e38c32`.
 This is a source audit, supplemented by request telemetry. It is not a universal
 proof of deterministic or exhaustive combat search.

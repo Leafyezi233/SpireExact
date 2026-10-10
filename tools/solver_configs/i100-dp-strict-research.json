@@ -1,0 +1,10 @@
+{
+  "_comment": "Upstream i100 evaluation settings (tools/sim_campaign.py:880-888 planner_argv + ARMS['final01'] = ['--feature-profile','i100']) with ONE addition: the local DP strict-then-search plugin. tools/run_solver.py's DEFAULTS already equal that base (workers 7, dop 1, evaluations 1000000, seconds = minutes*60-30, task-seconds 1200, budget-ms/boss-budget-ms 600000, nodes 60000, profile Low, dispatch ordered, dispatch-window 56, checkpoint-mib 1024, cache-mib 128, archive-entries 256, solver-seed 271828), so the set array only names what differs. resource_note is unnecessary: workers 7 / logical-cpus 8 / job-memory 14336 are the defaults.",
+  "minutes": 45,
+  "set": [
+    "feature-profile=i100",
+    "route-mode=force-then-search",
+    "low-io",
+    "event-driven-settle"
+  ]
+}

@@ -15,7 +15,7 @@ from typing import Any
 from .canonical import ContractError, read_json, write_json
 
 ROOT = Path(__file__).resolve().parents[1]
-PIN = '4d2c55069f2cf9f8c621631594857b412cf9660f'
+PIN = 'd7b46203593beb51f792628a2587b04f0850d1c2'
 REPOSITORY = 'https://github.com/Torch1230/CombatSolver.git'
 
 

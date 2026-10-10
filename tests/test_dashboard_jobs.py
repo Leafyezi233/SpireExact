@@ -16,12 +16,34 @@ class DashboardJobTests(unittest.TestCase):
             self.assertEqual(rows[0]['seeds'],['123'])
             self.assertTrue(rows[0]['not_a_holdout_result'])
     def test_seed_and_budget_do_not_accept_paths_or_commands(self):
-        self.assertEqual(jobs.validate({'seed':' 123ABC ','minutes':15}),{'seed':'123ABC','minutes':15})
+        self.assertEqual(jobs.validate({'seed':' 123ABC ','minutes':15}),{'seed':'123ABC','minutes':15,'dp':True})
+        self.assertEqual(jobs.validate({'seed':'123ABC','minutes':15,'dp':False}),{'seed':'123ABC','minutes':15,'dp':False})
         for seed in ('','../42','42;calc','--help','42\n43','a'*65):
             with self.assertRaises(ValueError):jobs.validate({'seed':seed})
         for budget in (True,0,181,'180'):
             with self.assertRaises(ValueError):jobs.validate({'seed':'42','minutes':budget})
+        for dp in ('yes',1,None,0):
+            with self.assertRaises(ValueError):jobs.validate({'seed':'42','dp':dp})
         with self.assertRaises(ValueError):jobs.validate({'seed':'42','prefix':'a-winning-route'})
+        with self.assertRaises(ValueError):jobs.validate({'seed':'42','route-mode':'force-then-search'})
+
+    def test_dp_switch_chooses_the_route_recipe(self):
+        # The panel's DP entry is the route plugin, not the public i100 recipe:
+        # the public switch list cannot be extended with --route-mode because
+        # those flags are explicit and resolve_route_mode refuses to override them.
+        request=jobs.validate({'seed':'42','minutes':45})
+        profile={'runtime_profile':'server-bounded-large-gen0','worker_memory_mib':1792,
+                 'solver_settings':['--feature-profile','i100','--clinic','--scheduler','focus']}
+        on=jobs.solver_settings(request,profile)
+        off=jobs.solver_settings({**request,'dp':False},profile)
+        self.assertIn('--clinic',off)
+        self.assertIn('--route-mode',on)
+        self.assertEqual(on[on.index('--route-mode')+1],'force-then-search')
+        self.assertIn('--strict-then-search',on)
+        self.assertIn('--route-strict',on)
+        self.assertEqual(on[on.index('--feature-profile')+1],'i100')
+        for flag in ('--clinic','--scheduler','--root-policies','--macro-plateau','--strategy-prior'):
+            self.assertNotIn(flag,on)
 
     def test_http_launch_requires_local_origin_and_session_token(self):
         http=server.ThreadingHTTPServer(('127.0.0.1',0),server.Handler)

@@ -99,7 +99,7 @@ class ResourcePlan:
     effective_cpus: float
     available_memory_bytes: int
     @classmethod
-    def detect(cls,workers: int|None=None,dop: int=1,worker_mib: int=900,reserve_mib: int=512):
+    def detect(cls,workers: int|None=None,dop: int=1,worker_mib: int=1536,reserve_mib: int=512):
         if dop<1 or worker_mib<64 or reserve_mib<0 or (workers is not None and workers<1):
             raise ValueError('invalid resource budget')
         cpu,mem=effective_cpus(),available_memory()

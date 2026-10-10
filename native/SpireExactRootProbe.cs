@@ -1,5 +1,5 @@
 // First native integration probe, targeted to CombatSolver commit
-// 4d2c55069f2cf9f8c621631594857b412cf9660f.
+// d7b46203593beb51f792628a2587b04f0850d1c2.
 // Source reviewed against upstream signatures; NOT compiled or game-tested in this delivery.
 // This is diagnostic evidence only, not a lossless rehydratable state adapter.
 using System;
@@ -29,7 +29,7 @@ internal static class SpireExactRootProbe
         var payload = new
         {
             schema = "spire-native-root-probe/v1",
-            pinnedCommit = "4d2c55069f2cf9f8c621631594857b412cf9660f",
+            pinnedCommit = "d7b46203593beb51f792628a2587b04f0850d1c2",
             gameAssembly = typeof(CombatState).Assembly.GetName().FullName,
             gameAssemblySha256 = FileSha256(typeof(CombatState).Assembly.Location),
             solverAssemblySha256 = FileSha256(typeof(CombatRootSnapshot).Assembly.Location),

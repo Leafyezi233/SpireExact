@@ -83,9 +83,9 @@ class Resources(unittest.TestCase):
     def detect(self,**kwargs):
         with patch('spire_exact.planning.resources.effective_cpus',return_value=8),patch('spire_exact.planning.resources.available_memory',return_value=8*1024*MIB):
             return ResourcePlan.detect(**kwargs)
-    def test_reserve_cpu(self):self.assertEqual(self.detect().workers,7)
+    def test_reserve_cpu(self):self.assertEqual(self.detect(worker_mib=900).workers,7)
     def test_nested_dop_bounded(self):self.assertLessEqual(self.detect(dop=3).workers*3,7)
-    def test_clamp_requested_workers(self):self.assertEqual(self.detect(workers=100).workers,8)
+    def test_clamp_requested_workers(self):self.assertEqual(self.detect(workers=100,worker_mib=900).workers,8)
     def test_explicit_eighth_slot_still_obeys_memory_and_dop(self):
         self.assertEqual(self.detect(workers=8,worker_mib=1536,reserve_mib=1024).workers,4)
         self.assertLessEqual(self.detect(workers=8,dop=3).workers*3,8)
@@ -248,3 +248,187 @@ class LifecycleTests(unittest.TestCase):
             result=solve(CTX,Path(d),pool,SearchConfig(evaluations=3))
         self.assertEqual(requests,['baseline','combat_probe','probe_followup'])
         self.assertEqual(result['lower_bound'],0);self.assertEqual(result['upper_bound'],1)
+
+class StopReasonTests(unittest.TestCase):
+    # A strict-only run ends after its own per-route evaluations. Neither its
+    # wall clock nor its evaluation count ran out, so reporting evaluation_budget
+    # attributed a 5-evaluation run to a 900-evaluation cap (measured on seed
+    # 70753827, run seed-70753827-arch5-bs8-strict: stop_reason said
+    # evaluation_budget while search_metrics.executed_evaluations was 5).
+    @staticmethod
+    def _evaluator_class(dead):
+        from time import perf_counter
+        from types import SimpleNamespace
+        class FakeEvaluator(Evaluator):
+            def __init__(self,pool,ctx,directory,config,advisor):
+                self.pool,self.ctx,self.directory,self.config,self.advisor=pool,ctx,directory,config,advisor
+                self.cache=SimpleNamespace(hits=0);self.checkpoints=None;self.identity=None
+                self.serial=0;self.records=[];self.started=perf_counter();self.deadline=self.started+100
+                self.inflight={};self.ready=[]
+            def dispatch(self,specs):self.ready.extend(self.batch(specs))
+            def collect(self,timeout=.2,ordered=False):
+                rows=self.ready;self.ready=[];return rows
+            def load_archive(self,paths):pass
+            def batch(self,specs):
+                outputs=[]
+                for spec in specs:
+                    if self.serial>=self.config.evaluations:break
+                    self.serial+=1;outputs.append((spec,dead,str(self.serial)))
+                return outputs
+        return FakeEvaluator
+    @staticmethod
+    def _plan(rows):
+        def one(i):
+            return {'id':i,'score':{'total':float(10-i)},'actions':[{'kind':'map','col':i+1,'row':1}],
+                    'route_tiers':{},'strict_tiers':{}}
+        return {'schema':'spire-route-plan/v2','routes_scored':len(rows),'top_n':len(rows),
+                'best':one(0),'top':[one(i) for i in rows],
+                'alternatives':[],'allocation_signal_only':True}
+    def _run(self,config,dead,rows=1):
+        fake=self._evaluator_class(dead)
+        with tempfile.TemporaryDirectory() as d,patch('spire_exact.planning.search.Evaluator',fake),\
+             patch('spire_exact.planning.route.plan',return_value=self._plan(range(rows))),\
+             patch('spire_exact.planning.walker.run',return_value={'max_floor':49}),\
+             patch('spire_exact.planning.search.write_json'):
+            from types import SimpleNamespace
+            from spire_exact.planning.search import solve
+            pool=SimpleNamespace(stats={},resources=SimpleNamespace(as_dict=lambda:{}))
+            return solve(CTX,Path(d),pool,config)
+    def test_strict_only_run_reports_the_prescription_not_a_budget(self):
+        dead=candidate('0',17,'TERMINAL',trace=[{'a':0},{'a':1}])
+        config=SearchConfig(evaluations=900,route_strict=True,walker_walks=1,route_top_n=2)
+        result=self._run(config,dead,rows=2)
+        self.assertEqual(result['stop_reason'],'strict_prescription_exhausted')
+        self.assertEqual(result['strict_prescription']['routes_prescribed'],2)
+        self.assertEqual(result['strict_prescription']['routes_evaluated'],2)
+        self.assertTrue(result['strict_prescription']['main_search_skipped'])
+        self.assertEqual(len(result['strict_routes']),2)
+        self.assertEqual([r['route_id'] for r in result['strict_routes']],[0,1])
+        self.assertEqual(result['lower_bound'],0);self.assertEqual(result['upper_bound'],1)
+    def test_strict_then_search_still_reports_its_own_budget(self):
+        dead=candidate('0',4,'TERMINAL',trace=[{'a':0},{'a':1}])
+        config=SearchConfig(evaluations=3,route_strict=True,strict_then_search=True,
+                            walker_walks=1,route_top_n=1)
+        result=self._run(config,dead,rows=1)
+        self.assertEqual(result['stop_reason'],'evaluation_budget')
+        self.assertNotIn('strict_prescription',result)
+
+
+class RouteReleaseTests(unittest.TestCase):
+    # force-then-search: after the strict prescriptions have each had their one
+    # evaluation the map is released (player brief of 2026-10-10) -- the host
+    # route preference (ev.route_actions) and the scheduler's top-N step filter
+    # both go, so the continuation walks the whole map graph.
+    @staticmethod
+    def _plan(rows):
+        def one(i):
+            return {'id': i, 'score': {'total': float(10 - i)},
+                    'actions': [{'kind': 'map', 'col': i + 1, 'row': 1}],
+                    'route_tiers': {}, 'strict_tiers': {}}
+        return {'schema': 'spire-route-plan/v2', 'routes_scored': len(rows), 'top_n': len(rows),
+                'best': one(0), 'top': [one(i) for i in rows],
+                'alternatives': [], 'allocation_signal_only': True}
+
+    def test_strict_then_search_releases_the_map(self):
+        from time import perf_counter
+        from types import SimpleNamespace
+        created = []
+        dead = candidate('0', 17, 'TERMINAL', trace=[{'a': 0}, {'a': 1}])
+
+        class FakeEvaluator(Evaluator):
+            def __init__(self, pool, ctx, directory, config, advisor):
+                self.pool, self.ctx, self.directory, self.config, self.advisor = pool, ctx, directory, config, advisor
+                self.cache = SimpleNamespace(hits=0); self.checkpoints = None; self.identity = None
+                self.serial = 0; self.records = []; self.started = perf_counter(); self.deadline = self.started + 100
+                self.inflight = {}; self.ready = []
+                created.append(self)
+
+            def dispatch(self, specs): self.ready.extend(self.batch(specs))
+
+            def collect(self, timeout=.2, ordered=False):
+                rows = self.ready; self.ready = []; return rows
+
+            def load_archive(self, paths): pass
+
+            def batch(self, specs):
+                outputs = []
+                for spec in specs:
+                    if self.serial >= self.config.evaluations: break
+                    self.serial += 1; outputs.append((spec, dead, str(self.serial)))
+                return outputs
+
+        with tempfile.TemporaryDirectory() as d, \
+             patch('spire_exact.planning.search.Evaluator', FakeEvaluator), \
+             patch('spire_exact.planning.route.plan', return_value=self._plan(range(2))), \
+             patch('spire_exact.planning.walker.run', return_value={'max_floor': 49}), \
+             patch('spire_exact.planning.search.write_json'):
+            from spire_exact.planning.search import solve
+            pool = SimpleNamespace(stats={}, resources=SimpleNamespace(as_dict=lambda: {}))
+            result = solve(CTX, Path(d), pool, SearchConfig(evaluations=3, route_strict=True,
+                          strict_then_search=True, walker_walks=1, route_top_n=2))
+        self.assertTrue(result['strict_continued']['tiers_dropped'])
+        self.assertTrue(result['strict_continued']['map_released'])
+        self.assertEqual(result['search_metrics']['route_released'], True)
+        self.assertIsNone(created[-1].route_actions)
+        self.assertIsNone(created[-1].route_tiers)
+
+    def test_strict_routes_are_all_dispatched_before_the_first_collect(self):
+        # The strict pass used to run one batch() per route, so exactly one
+        # native run was in flight at a time and the other worker lanes idled
+        # (measured 2026-10-10: five routes cost 23.3 s of a 209.6 s run while
+        # the longest single route was 9.7 s). All prescriptions are now
+        # dispatched first and collected afterwards. This asserts the ORDER,
+        # which is the whole optimisation: prescriptions and their ranking are
+        # untouched.
+        from time import perf_counter
+        from types import SimpleNamespace
+        created = []; trace = []
+        dead = candidate('0', 17, 'TERMINAL', trace=[{'a': 0}, {'a': 1}])
+
+        class FakeEvaluator(Evaluator):
+            def __init__(self, pool, ctx, directory, config, advisor):
+                self.pool, self.ctx, self.directory, self.config, self.advisor = pool, ctx, directory, config, advisor
+                self.cache = SimpleNamespace(hits=0); self.checkpoints = None; self.identity = None
+                self.serial = 0; self.records = []; self.started = perf_counter(); self.deadline = self.started + 100
+                self.inflight = {}; self.ready = []
+                created.append(self)
+
+            def dispatch(self, specs):
+                trace.append('dispatch')
+                self.ready.extend(self.batch(specs))
+
+            def collect(self, timeout=.2, ordered=False):
+                trace.append('collect')
+                rows = self.ready; self.ready = []; return rows
+
+            def load_archive(self, paths): pass
+
+            def batch(self, specs):
+                outputs = []
+                for spec in specs:
+                    if self.serial >= self.config.evaluations: break
+                    self.serial += 1; outputs.append((spec, dead, str(self.serial)))
+                return outputs
+
+        with tempfile.TemporaryDirectory() as d, \
+             patch('spire_exact.planning.search.Evaluator', FakeEvaluator), \
+             patch('spire_exact.planning.route.plan', return_value=self._plan(range(2))), \
+             patch('spire_exact.planning.walker.run', return_value={'max_floor': 49}), \
+             patch('spire_exact.planning.search.write_json'):
+            from spire_exact.planning.search import solve
+            pool = SimpleNamespace(stats={}, resources=SimpleNamespace(as_dict=lambda: {}))
+            result = solve(CTX, Path(d), pool, SearchConfig(evaluations=3, route_strict=True,
+                          strict_then_search=True, walker_walks=1, route_top_n=2))
+        first_collect = trace.index('collect')
+        self.assertEqual(trace[:first_collect], ['dispatch', 'dispatch'])
+        self.assertEqual([row['route_id'] for row in result['strict_routes']], [0, 1])
+    def test_release_scrubs_probes_queued_during_the_strict_pass(self):
+        # A preparation probe queued while the strict routes ran carries the
+        # strict template's route and policy_prior. Release must scrub those
+        # pending specs too, or the released phase still injects DP's map
+        # preference through a stale request (found by smoke run 2026-10-10).
+        source = (Path(__file__).resolve().parents[1] / 'spire_exact' / 'planning' / 'search.py').read_text(encoding='utf-8')
+        block = source[source.index('if config.strict_then_search and not certificate:'):]
+        block = block[:block.index("result['strict_routes']")]
+        self.assertIn("pop('route',None)", block)
+        self.assertIn("pop('policy_prior',None)", block)

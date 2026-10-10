@@ -3,6 +3,40 @@ from pathlib import Path
 from spire_exact.planning.io import read_json,write_json
 from spire_exact.planning.search import SearchConfig,Evaluator
 from spire_exact.mode1 import context
+from spire_exact.planning.__main__ import scale_budget_schedule
+
+class BudgetScheduleScaleTests(unittest.TestCase):
+    """--budget-scale (2026-10-09). The host picks a fight's solver clock out
+    of budget_schedule, so a scaled clock that never reaches the schedule is
+    the difference between a real experiment and a silent no-op."""
+
+    def schedule(self):
+        return {'normal': [350, 800, 1000], 'elite': [1400, 3200, 4000],
+                'boss': [2800, 6400, 16000], 'stoke_bonus': 1000,
+                'early_fight_discount': 100, 'early_fights_per_act': 2}
+
+    def test_a_factor_of_one_leaves_the_committed_schedule_untouched(self):
+        before = self.schedule()
+        after = scale_budget_schedule(dict(before), 1.0)
+        self.assertEqual(after, before)
+
+    def test_ten_x_reaches_every_clock_including_the_flat_ones(self):
+        scaled = scale_budget_schedule(self.schedule(), 10.0)
+        self.assertEqual(scaled['normal'], [3500, 8000, 10000])
+        self.assertEqual(scaled['elite'], [14000, 32000, 40000])
+        self.assertEqual(scaled['boss'], [28000, 64000, 160000])
+        # A boss scaled 10x but discounted by the old flat 100 would not be 10x.
+        self.assertEqual(scaled['stoke_bonus'], 10000)
+        self.assertEqual(scaled['early_fight_discount'], 1000)
+        # The fight-count knob is not a clock and must not be scaled.
+        self.assertEqual(scaled['early_fights_per_act'], 2)
+
+    def test_a_shrinking_factor_never_reaches_a_budget_the_host_rejects(self):
+        scaled = scale_budget_schedule(self.schedule(), 0.001)
+        for key in ('normal', 'elite', 'boss'):
+            self.assertTrue(all(v >= 1 for v in scaled[key]))
+        self.assertEqual(scaled['stoke_bonus'], 1)
+
 
 class A10CountIoTests(unittest.TestCase):
     def test_compact_atomic_json_preserves_exact_payload(self):

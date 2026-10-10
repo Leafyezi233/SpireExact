@@ -87,10 +87,13 @@ class StrategicScheduler:
     prevents scheduling the same experiment twice and makes no state claim.
     """
     weights={'route':.20,'deck':.25,'resources':.15,'failure':.20,'preparation':.10,'exploration':.10}
-    def __init__(self):
+    def __init__(self,route_filter=None):
         self.branches=[];self.seen=set();self.executed=set();self.submitted=set();self.counts=Counter()
         self.room_visits=Counter();self.source_visits=Counter();self.order=0
         self.generated=0;self.duplicates=0
+        # Route planner constraint (route.py): map decision sites only queue
+        # the planned route's next step; non-map decisions stay free.
+        self.route_filter=route_filter;self.route_filtered=0;self.route_released=False
 
     def add(self,result,label):
         trace=result.get('trace',[]);diagnosis=FailureAnalyzer.analyze(result)
@@ -99,8 +102,9 @@ class StrategicScheduler:
         for i,e in enumerate(result.get('decision_evidence',[])[:len(trace)]):
             if strategic_phase(e):
                 key=canonical(trace[:i+1]);self.seen.add(key);self.executed.add(key)
-        room_phases=set()
+        room_phases=set();map_count=0
         for i,e in enumerate(result.get('decision_evidence',[])[:len(trace)]):
+            if i and trace[i-1].get('kind')=='map':map_count+=1
             category=strategic_phase(e)
             if not category:continue
             obs=e.get('observation') or {};floor=int(obs.get('floor') or 0)
@@ -113,6 +117,8 @@ class StrategicScheduler:
             for action in e.get('available_actions',[]):
                 if action.get('kind') in ('discard_potion','reward','rewards_skip'):continue
                 if canonical(action)==canonical(trace[i]):continue
+                if action.get('kind')=='map' and self.route_filter is not None and not self.route_filter(map_count,action):
+                    self.route_filtered+=1;continue
                 key=canonical(trace[:i]+[action]);self.generated+=1
                 if key in self.seen:self.duplicates+=1;continue
                 self.seen.add(key);self.order+=1
@@ -158,10 +164,19 @@ class StrategicScheduler:
                     'index':b.index,'source':b.source_label,'diagnosis':b.diagnosis}
         return None
 
+    def release_route_filter(self):
+        """Drop the route planner's map constraint (dp.mode force-then-search):
+        the strict prescriptions have each had their one evaluation, so the
+        continuation search walks the whole map graph instead of the top-N
+        plan's step union. The filtered count stays for the record."""
+        self.route_filter=None;self.route_released=True
+
     def snapshot(self):
         return {'candidates_generated':self.generated,'candidates_deduplicated':self.duplicates,
                 'pending_branches':len(self.branches),'scheduled_by_category':dict(self.counts),
-                'unique_strategic_branch_requests':len(self.submitted),'room_decision_sites':len(self.room_visits)}
+                'unique_strategic_branch_requests':len(self.submitted),'room_decision_sites':len(self.room_visits),
+                **({'route_filtered_branches':self.route_filtered,'route_released':self.route_released}
+                   if self.route_filter is not None or self.route_released else{})}
 
 
 class DepthFirstScheduler(StrategicScheduler):

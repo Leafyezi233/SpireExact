@@ -1,5 +1,5 @@
 GameBootstrap.cs, OfflineLocalization.cs, MainLoopContext.cs and MemorySaveStore.cs derive from
-Torch1230/CombatSolver commit 4d2c55069f2cf9f8c621631594857b412cf9660f
+Torch1230/CombatSolver commit d7b46203593beb51f792628a2587b04f0850d1c2
 tools/OfflineSearchHarness, under the included MIT license.
 
 Local change: remove the CombatSolver display-server override, so this data host

@@ -44,7 +44,7 @@ Scarcity 的原始参数来自 `MegaCrit.Sts2.Core.Odds/CardRarityOdds.cs`；它
 
 ## 离线与上游范围
 
-固定上游提交为 `4d2c55069f2cf9f8c621631594857b412cf9660f`。已读 `vendor/CombatSolver/tools/OfflineSearchHarness/ModRuntime.cs`：`ApplyFixedBudgetSettings` 将 `OnlineStatisticsEnabled` 设为 false，随后建立 unattended 离线会话。`RunStatistics` 的上传条件同时要求在线统计启用且不是 unattended；`CombatShowcaseCollector` 也检查在线统计开关。尚需在 M0 原生运行中记录这些开关的实际值，静态关闭证据不冒充网络抓包证明。
+固定上游提交为 `d7b46203593beb51f792628a2587b04f0850d1c2`。已读 `vendor/CombatSolver/tools/OfflineSearchHarness/ModRuntime.cs`：`ApplyFixedBudgetSettings` 将 `OnlineStatisticsEnabled` 设为 false，随后建立 unattended 离线会话。`RunStatistics` 的上传条件同时要求在线统计启用且不是 unattended；`CombatShowcaseCollector` 也检查在线统计开关。尚需在 M0 原生运行中记录这些开关的实际值，静态关闭证据不冒充网络抓包证明。
 
 ## TestSubject 多形态 HP（2026-10-01 补核）
 

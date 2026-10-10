@@ -1,48 +1,43 @@
-# holdout-01 发布范围与验证记录
+# i100 发布范围与验证方法
 
-本次源码发布以 `frozen-i054a` 为版本锚点，对应 iteration-055 的 `holdout-01` 第一阶段。Python 路线规划核心与 C# 宿主来自该冻结源码，构建、启动、完整动作重放、依赖定位及导航入口为本次交付新增。17/20 的研究结果归属于该冻结基线；后续策略与主树 infra 改动按各自版本记录。
+本源码 **0.5.0-dp** 发布 **i100 + 本地 DP 路线插件**：关口诊所按"进入该幕前的决策序列（stem）× 首领关口"判断卡点是根不对还是深度不够，并据此分配回退与局部加深；SpireBoard、单种子启动器和规划器命令行默认使用 i100。发布内容包括规划与宿主源码、完整前端、公开依赖准备与源码编译、命令行启动、完整动作重放入口和精选证据。
 
-## 研究设置与历史结果
+## 版本身份
 
-- IRONCLAD / Ascension 10 / all unlocks / mode1 全信息 / fresh start，目标为整局胜利 0/1。
-- 配置为 focus + `--root-policies pick,elo --focus-cluster-cap 2 --final-gate-plan open`，有序派发，`solver_seed=271828`。
-- 20 个新种子各运行一次，30 分钟安全上限；17 个获胜候选经过独立新进程重放确认，实际 worker 为 5–7 个。
-- 研究设计为固定预算、单配置的种子面板。结果汇总记录这 20 次运行；同种子成功概率和配置比较属于独立的研究设计。其余 3 个种子保留为该预算下的 `UNKNOWN`。
-- [results.md](../release/holdout-01/results.md) 与 [summary.json](../release/holdout-01/summary.json) 保存结果、版本与依赖指纹、17 条完整获胜动作及历史证书。完整作业、逐步状态、worker 日志和冻结二进制继续保存在本地研究档案中。
-
-## 公开源码的构建适配
-
-发布宿主保留原有完整 DLL 白名单和 block 补偿修正，并加入跨目录构建的固定契约检查。`CorePowerSupport` 整类及嵌套类型的规范化 CIL 需与已审阅基线一致，宿主直接校验实际加载的 DLL；契约摘要固定在源码中。游戏与 RitsuLib 依赖使用固定 SHA 校验。
-
-这项适配服务于不同目录中的固定源码重编译。历史搜索结果对应原始冻结二进制，本次源码构建对应新的二进制指纹，两组身份分别记录；规划策略沿用 holdout-01 基线。
-
-## 本次交付验证
-
-已在 Windows / Python 3.12.14 / .NET SDK 9.0.318 下完成宿主、CombatSolver、harness 和静态契约检查器的四项目源码构建，均为 0 warning / 0 error，静态身份检查通过。
-
-`CorePowerSupport` 整类规范化 CIL 与已审阅基线一致；CIL 指令、上游补丁源码及依赖字节的变更检查均按保护规则拒绝。详情见 [BUILD_VALIDATION.json](../release/BUILD_VALIDATION.json) 与 [SOLVER_CONTRACT_AUDIT.json](SOLVER_CONTRACT_AUDIT.json)。
-
-本次交付验证覆盖依赖定位、编译与静态身份校验。宿主 `Configure`、原生游戏请求和当前构建的胜利路线重放仍待运行验证；本次新增整局搜索、战斗探针与种子面板实验数为 0。历史原生执行与胜利证据由 holdout-01 记录提供。
-
-| 层次 | 当前范围与状态 |
+| 对象 | 身份及用途 |
 | --- | --- |
-| 发行内容 | 源码、测试、构建工具、许可证及精选 holdout 证据 |
-| 构建环境 | Windows x64，普通 Python/.NET/Git，用户安装的游戏与 Workshop 依赖 |
-| 身份保护 | game/solver/harness 字节校验与固定 CIL 契约；源码构建及静态校验已完成 |
-| 历史执行 | 原始身份下的离线 TestMode 执行与独立新进程重放，见 holdout-01 证书 |
-| 当前构建重放 | 提供双新进程动作重放入口，通过后生成本机构建身份下的新证书；运行验证待完成 |
-| 正常游戏等价 | 正常 Godot 游戏等价待验证 |
-| 其他平台与版本 | Linux/macOS、后续游戏与 Workshop 版本待验证 |
-| SpireBoard | 附看板源码；主要运行入口为 CLI，看板启动任务的端到端验收待完成 |
+| i100 | profile `i100`，取值来自 `spire_exact/planning/final_defaults.py`；解析结果与源码身份见 [defaults.json](../release/i100/defaults.json) |
+| 公开入口 | SpireBoard（`tools/prepare_dashboard.py` 绑定）、`tools/run_release_source.py`、`python -m spire_exact.planning` 均默认 i100 |
+| 可选旧版本 | `--feature-profile i082`（`frozen-i082` 配置，原冻结 `source_version` `e1b10f6f10f1c1d27f5f176f8b4e73ce8aa07fc2a9ab94b9eaf2d9cd10bd7c74`）、`--feature-profile i085` |
+| 历史 holdout-01 | `frozen-i054a`，20 次 30 分钟结果与 17 条获胜路线 |
+| 用户重新编译 | 依赖、宿主、solver / harness 的二进制指纹随 setup 与运行记录保存；胜利证书在当前二进制下由重放生成 |
 
-`UNKNOWN [0,1]` 表示该预算下结果未知。`VERIFIED_WIN_IN_NATIVE_HOST [1,1]` 表示离线规则模型中的整局胜利由独立重放确认。该布尔目标与最优分数、最少战损、无未来信息游玩和正常游戏等价分别定义、分别验证。
+## 验证层次
 
-## 公开目录与本地档案
+| 层次 | 内容 |
+| --- | --- |
+| 源码回归 | 全量 Python 测试与前端 JS 检查；记录见 [tests.json](../release/i100/evidence/tests.json) |
+| 兼容性 | legacy / i075-final / i081 / i082 显式选择时解析值逐项不变，i082 启动参数不变，18 条夹具路径 / 1,440 个请求一致；原生差异只有战斗边界修复的两个文件（[compatibility.json](../release/i100/evidence/compatibility.json)） |
+| 离线评估 | 合成战役世界驱动真实规划主循环，代码冻结后在 80 个留出世界 × 2 个 solver seed 上比较 i100、i054a、i082、i085 与消融（[results.md](../release/i100/results.md)） |
+| 源码编译与静态身份 | 用户本机运行 `tools/setup_source.py`，编译宿主、solver、harness 与静态契约检查器，并核对依赖指纹与固定 CIL 契约 |
+| 前端准备 | `tools/prepare_dashboard.py` 绑定当前源码与宿主，执行零动作初始化，验证暂停计时前置条件 |
+| 原生运行 | 每个作业保存设置、资源、诊所判定与评估账本 |
+| 胜利确认 | 新进程从初始状态完整重放，无 advisor / 检查点 / 缓存，观察原生 `OnEnded(true)` 后生成证书 |
 
-公开目录保留项目源码、回归测试、构建补丁、固定上游信息、MIT 许可证和第三方署名。setup、单种子启动和完整动作重放是本次交付的运行入口；其他研究工具随源码提供，按工具所需数据与环境使用。
+原生分层面板（i054a 未解 / 慢解 / 快解三层，另含开场选牌回归种子）与配对基准命令见 [I100.md 第 7 节](I100.md#7-本机-windows-原生验证)。
 
-依赖、编译产物、缓存和运行输出由本机 setup 与作业生成。用户提供自己的游戏与 Workshop 安装；游戏程序集与素材、反编译游戏源码、SDK、作者缓存、私人聊天及完整运行目录保留在各自本地环境。`vendor/`、`runtime/`、`.tools/` 和 `outputs/` 纳入 Git 忽略规则。
+## 发行内容
 
-三个依赖作者私有资料的历史工具 `tools/diagnose_solver_pcore.py`、`tools/profile_solver_panel.py` 和 `tools/publish_run_report.py` 继续本地保留。公开导出范围见 [CLEANUP_REPORT.json](../release/CLEANUP_REPORT.json)。
+发行保留规划 / 宿主源码、完整前端、回归测试、公开构建与身份适配、固定上游信息、MIT 许可证、第三方署名和精选证据。游戏与 Workshop DLL、SDK、第三方检出、缓存和运行输出由用户在本机准备。SpireBoard 运行页支持作业暂停、继续与退出；暂停保存存活进程的内存，暂停时间不计入求解预算。[前端说明](../dashboard/README.md)
 
-完整冻结源码与原始运行档案继续保存。公开身份清单引用各次实际构建与执行记录，版本更新随新的构建和重放证据生成。
+## 本地 DP 分支（0.5.0-dp）
+
+在 i100 之上，本分支加了一个**默认关闭**的整局 DP 路线插件（`spire_exact/planning/route.py`、`walker.py`、`dp_defaults.py`）：先用 walker 走地图图，再用动态规划对枚举路线打分，产出地图动作序列与卡牌层级，按 `--route-mode`（`off` / `guide` / `force` / `force-then-search`）决定如何接管搜索。不传 `--route-mode` 时上游 i100 的行为逐项不变，因此本插件**不改变 i100 的发布证据**：`release/i100/` 的内容与 `version: 0.4.0b1` 均未改动。
+
+- 固定设置与运行记录：[release/local-dp/](../release/local-dp/)；机制说明见 [DP.md](DP.md)；面板开关默认勾选。
+- `--route-workers` 默认自动检测本机物理性能核（Windows CPU Sets，不含超线程兄弟与小核；非 Windows 回退 1）。
+- 证据边界：真机记录只有单种子（1899537279）单次观测，**不构成胜率证据**；计划分不预测路线存活（Pearson −0.221）。
+
+## 历史版本
+
+i082 的实现结果、测试与部署记录保留在 [release/i082](../release/i082/)，机制说明见 [I082.md](I082.md) 与 [I082_ARCHITECTURE.md](I082_ARCHITECTURE.md)；i085 的宏观与长尾研究见 [I085.md](I085.md) 与 [release/i085](../release/i085/)。 本地 DP 分支（0.5.0-dp）的记录见 [release/local-dp](../release/local-dp/) 与 [DP.md](DP.md)。

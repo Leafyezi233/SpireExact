@@ -12,6 +12,7 @@ ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT));os.chdir(ROOT)
 from tools.rolling_storage import acquire_job_slot, admission, JOB_WRITE_CAP
 from tools.cpu_topology import inventory,homogeneous_cpus
+from spire_exact.pausable_clock import active_counter,paused_seconds
 
 class Basic(c.Structure):
     _fields_=[('PerProcessUserTimeLimit',c.c_longlong),('PerJobUserTimeLimit',c.c_longlong),
@@ -27,8 +28,12 @@ class Accounting(c.Structure):
 class AccountingIO(c.Structure):
     _fields_=[('BasicInfo',Accounting),('IoInfo',IO)]
 
+# A10 protocol -> enforced logical-CPU count. 'A10-seed-v2-cpu6' is the user's
+# 6-core (2,4,6,8,10,12) strict-then-search topology; it keeps every other A10 rule.
+A10_LOGICAL_CPUS={'A10-seed-v2':8,'A10-seed-v2-scaling16':16,'A10-seed-v2-cpu6':6}
+
 def job_memory_mib(protocol, env):
-    a10=protocol in ('A10-seed-v2','A10-seed-v2-scaling16')
+    a10=protocol in A10_LOGICAL_CPUS
     default=14336 if a10 else 6144
     if 'SPIRE_JOB_MEMORY_MIB' not in env:return default
     value=int(env['SPIRE_JOB_MEMORY_MIB'])
@@ -59,8 +64,8 @@ def main():
     process=k.GetCurrentProcess();allowed=c.c_size_t();system=c.c_size_t()
     if not k.GetProcessAffinityMask(process,c.byref(allowed),c.byref(system)):raise c.WinError(c.get_last_error())
     protocol=os.environ.get('SPIRE_PROTOCOL','A0-180s-v1')
-    a10=protocol in('A10-seed-v2','A10-seed-v2-scaling16')
-    logical_cpus=16 if protocol=='A10-seed-v2-scaling16'else 8
+    logical_cpus=A10_LOGICAL_CPUS.get(protocol)
+    a10=logical_cpus is not None
     wall_limit=int(os.environ.get('SPIRE_WALL_LIMIT_SECONDS','10800' if a10 else '180'))
     if wall_limit<1 or wall_limit>(10800 if a10 else 180):raise SystemExit('Wall safety cap outside selected protocol')
     offset=int(os.environ.get('SPIRE_CPU_OFFSET','0'))
@@ -81,14 +86,15 @@ def main():
     if not k.AssignProcessToJobObject(job,process):raise c.WinError(c.get_last_error())
     if not k.SetProcessAffinityMask(process,mask):raise c.WinError(c.get_last_error())
     os.environ['SPIRE_TARGET_CPUS']=str(len(cores));os.environ['SPIRE_MEMORY_BUDGET_MIB']=str(limits.JobMemoryLimit//1024**2)
-    begun=time.perf_counter();done=threading.Event()
+    begun=time.perf_counter();active_begun=active_counter();done=threading.Event()
     from spire_exact.planning.runtime_metrics import configure
     def live_metrics():
         info=Accounting();actual=Extended()
         k.QueryInformationJobObject(job,1,c.byref(info),c.sizeof(info),None)
         k.QueryInformationJobObject(job,9,c.byref(actual),c.sizeof(actual),None)
         return {'job_metrics_available':True,'job_cpu_seconds':(info.TotalUserTime+info.TotalKernelTime)/10_000_000,
-                'job_wall_seconds':time.perf_counter()-begun,'peak_job_commit_bytes':actual.PeakJobMemoryUsed}
+                'job_wall_seconds':time.perf_counter()-begun,'peak_job_commit_bytes':actual.PeakJobMemoryUsed,
+                **({'job_active_seconds':active_counter()-active_begun,'job_paused_seconds':paused_seconds(),'budget_clock':'pause_excluded'} if os.environ.get('SPIRE_PAUSE_LEDGER') else {})}
     configure(live_metrics)
     events=out.parent/(out.name+'-events.jsonl')
     def hook(kind,**fields):
@@ -112,6 +118,8 @@ def main():
           'job_write_transfer_bytes':io.IoInfo.WriteTransferCount,'job_write_cap_bytes':JOB_WRITE_CAP}
         if os.environ.get('SPIRE_RESOURCE_OVERRIDE_NOTE'):
             data['resource_protocol_override']=os.environ['SPIRE_RESOURCE_OVERRIDE_NOTE']
+        if os.environ.get('SPIRE_PAUSE_LEDGER'):
+            data.update(active_seconds=active_counter()-active_begun,paused_seconds=paused_seconds(),budget_clock='pause_excluded')
         telemetry.write_text(json.dumps(data,indent=2)+'\n')
     def watchdog():
         reported=False
@@ -121,9 +129,9 @@ def main():
                 record(storage_limit=True);k.TerminateJobObject(job,125);return
             if io.IoInfo.WriteTransferCount>=JOB_WRITE_CAP:
                 record(storage_limit=True);hook('failed',reason='STORAGE_LIMIT');k.TerminateJobObject(job,125);return
-            if not reported and a10 and time.perf_counter()-begun>=9000:
+            if not reported and a10 and active_counter()-active_begun>=9000:
                 record();hook('report_point_150min');reported=True
-            if time.perf_counter()-begun>=wall_limit:
+            if active_counter()-active_begun>=wall_limit:
                 record(True);hook('censored',reason='WALL_SAFETY_CAP');k.TerminateJobObject(job,124);return
     threading.Thread(target=watchdog,daemon=True).start()
     try:
