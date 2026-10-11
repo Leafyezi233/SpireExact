@@ -115,11 +115,14 @@
 <dialog id="launch-dialog" class="dialog" aria-labelledby="launch-title">
 <form id="launch-form">
 <div class="dialog-head"><h2 id="launch-title">新建求解</h2><button type="button" id="launch-close" class="ghost-button" aria-label="关闭">关闭</button></div>
-<p class="dialog-note">固定配置：铁甲战士 · 进阶 10 · 全解锁 · 全信息，使用 8 个逻辑 CPU 和 16 GiB 内存，从全新的一局开始。</p>
+<p class="dialog-note">固定配置：铁甲战士 · 进阶 10 · 全解锁 · 全信息，使用 8 个逻辑 CPU 和 16 GiB 内存，从全新的一局开始。拓扑决定 worker 数与每 worker 的求解线程数。</p>
 <p class="dialog-note">当前入口：i100 公开配方（关口诊所 + 策略先验）。</p>
 <label class="check-row"><input id="solve-dp" type="checkbox" checked><span>启用 DP 路线模式</span></label>
 <p class="dialog-note">默认开启：先严格试算 DP 规划出的若干条路线，随后完全放开地图、把控制权交还主搜索（strict-then-search）。关闭则使用上游 i100 默认入口。</p>
 <label>游戏种子<input id="solve-seed" name="seed" type="text" maxlength="64" required placeholder="例如 1922586569" autocomplete="off" pattern="[A-Za-z0-9][A-Za-z0-9_-]{0,63}"><small>1–64 位字母、数字、下划线或连字符。</small></label>
+<label>运行拓扑<select id="solve-topology"><option value="3x2" selected>3×2（3 worker · 每 worker 2 线程，默认）</option><option value="6x1">6×1（6 worker · 单线程）</option><option value="7x1">7×1（7 worker · 单线程，上游公开配方）</option><option value="2x3">2×3（2 worker · 每 worker 3 线程）</option></select><small>决定 worker 数与每个 worker 的求解线程数。</small></label>
+<label>每 worker 内存<select id="solve-memory"><option value="1024">1024 MiB</option><option value="1536">1536 MiB</option><option value="1792" selected>1792 MiB</option><option value="2048">2048 MiB</option></select><small>内存紧张时改小，或改选更少 worker 的拓扑。</small></label>
+<label>评估上限<input id="solve-evaluations" type="number" min="1" max="1000000" step="1" value="1000000"><small>1–1000000，默认不限制。</small></label>
 <label>时间上限<select id="solve-minutes"><option value="1">1 分钟（试运行）</option><option value="15">15 分钟</option><option value="30" selected>30 分钟</option><option value="45">45 分钟</option></select><small>到时间仍未解出不代表种子无解。</small></label>
 <p id="launch-message" role="status" aria-live="polite">已有求解占用资源时会自动排队，排队时间不计入上限。</p>
 <div class="dialog-actions"><button id="launch-button" class="primary-button" type="submit">开始求解</button></div>

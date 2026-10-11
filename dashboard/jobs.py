@@ -22,14 +22,45 @@ def process_identity(pid):
         return {'pid':int(pid),'created_ticks':created.value}
     finally:k.CloseHandle(handle)
 
+# Named parallel layouts the panel can request. dop>1 requires the legacy CLR
+# runtime profile (spire_exact/planning/pool.py:88), so every preset with dop>1
+# pins runtime_profile='legacy'. '7x1' reproduces the upstream public recipe.
+TOPOLOGIES={
+    '3x2':{'workers':3,'dop':2,'runtime_profile':'legacy',
+           'worker_memory_mib':1792,'reserve_mib':1024},
+    '6x1':{'workers':6,'dop':1,'runtime_profile':'server-bounded-large-gen0',
+           'worker_memory_mib':1024,'reserve_mib':512},
+    '7x1':{'workers':7,'dop':1,'runtime_profile':'server-bounded-large-gen0',
+           'worker_memory_mib':1792,'reserve_mib':1024},
+    '2x3':{'workers':2,'dop':3,'runtime_profile':'legacy',
+           'worker_memory_mib':1792,'reserve_mib':1024},
+}
+DEFAULT_TOPOLOGY='3x2'
+WORKER_MEMORY_CHOICES=(1024,1536,1792,2048)
+
 def validate(payload):
-    if not isinstance(payload,dict)or set(payload)-{'seed','minutes','dp'}:raise ValueError('请求只能包含种子、时间预算和 DP 开关。')
+    allowed={'seed','minutes','dp','topology','worker_memory_mib','evaluations'}
+    if not isinstance(payload,dict)or set(payload)-allowed:raise ValueError('请求只能包含种子、时间预算、DP 开关和运行设置。')
     seed=payload.get('seed');minutes=payload.get('minutes',30);dp=payload.get('dp',True)
     if not isinstance(seed,str)or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_-]{0,63}',seed.strip()):
         raise ValueError('种子需为 1–64 位字母、数字、下划线或连字符，首位为字母或数字。')
     if type(minutes)is not int or not 1<=minutes<=45:raise ValueError('时间预算需为 1–45 分钟。')
     if not isinstance(dp,bool):raise ValueError('DP 开关需为布尔值。')
-    return {'seed':seed.strip(),'minutes':minutes,'dp':dp}
+    request={'seed':seed.strip(),'minutes':minutes,'dp':dp}
+    if 'topology' in payload:
+        if payload['topology'] not in TOPOLOGIES:raise ValueError('运行拓扑需为 3x2、6x1、7x1 或 2x3。')
+        request['topology']=payload['topology']
+    if 'worker_memory_mib' in payload:
+        memory=payload['worker_memory_mib']
+        if type(memory)is not int or memory not in WORKER_MEMORY_CHOICES:
+            raise ValueError('每 worker 内存需为 1024、1536、1792 或 2048 MiB。')
+        request['worker_memory_mib']=memory
+    if 'evaluations' in payload:
+        evaluations=payload['evaluations']
+        if type(evaluations)is not int or not 1<=evaluations<=1000000:
+            raise ValueError('评估数需为 1–1000000 的整数。')
+        request['evaluations']=evaluations
+    return request
 
 def read(path,default=None):
     # Import lazily to share rename-safe readers with the HTTP server.
@@ -105,6 +136,31 @@ def dp_settings():
     from spire_exact.planning.final_defaults import PUBLIC_PROFILE
     return ['--feature-profile',PUBLIC_PROFILE,*route_mode_argv(DP_ROUTE_MODE)]
 
+def _without(argv,flags):
+    """Drop '--flag value' pairs whose flag is owned by the resolved layout."""
+    out=[];skip=False
+    for token in argv:
+        if skip:skip=False;continue
+        if token in flags:skip=True;continue
+        out.append(token)
+    return out
+
+def resolved_topology(request,profile):
+    """The parallel layout that will actually launch.
+
+    A request without an explicit topology keeps the historical single-lane
+    default so older callers and their recorded arguments stay valid.
+    """
+    preset=request.get('topology')
+    if preset is None:
+        return {'workers':7,'dop':1,'reserve_mib':1024,
+                'runtime_profile':profile.get('runtime_profile','legacy'),
+                'worker_memory_mib':profile.get('worker_memory_mib',1792)}
+    row=TOPOLOGIES[preset]
+    return {'workers':row['workers'],'dop':row['dop'],'reserve_mib':row['reserve_mib'],
+            'runtime_profile':row['runtime_profile'],
+            'worker_memory_mib':request.get('worker_memory_mib',row['worker_memory_mib'])}
+
 def solver_settings(request,profile):
     """Explicit, reviewable settings of the manual entry, written before launch."""
     seconds=request['minutes']*60
@@ -114,15 +170,24 @@ def solver_settings(request,profile):
     protected={'--seed','--out','--game-dir','--character','--ascension','--unlocks','--workers','--dop',
                '--seconds','--prefix','--import-checkpoints','--scope-prefix'}
     if any(v in protected for v in extra):raise ValueError('入口不能覆盖种子、初始状态或作业边界。')
-    return ['--seed',request['seed'],'--character','IRONCLAD','--ascension','10','--unlocks','all','--workers','7','--dop','1',
-        '--worker-memory-mib',str(profile.get('worker_memory_mib',1792)),'--reserve-mib','1024',
-        '--evaluations','1000000','--seconds',str(max(10,seconds-30)),
+    layout=resolved_topology(request,profile)
+    # An explicit topology owns the parallel layout. The public recipe in
+    # solver-profile.json repeats --runtime-profile/--worker-memory-mib, and
+    # argparse keeps the LAST occurrence, so leaving both would let a
+    # dop>1 preset meet the server runtime profile and trip
+    # pool.py:88 ('Experimental runtime profiles require solver DOP 1').
+    if request.get('topology') is not None:
+        extra=_without(extra,('--runtime-profile','--worker-memory-mib'))
+    return ['--seed',request['seed'],'--character','IRONCLAD','--ascension','10','--unlocks','all',
+        '--workers',str(layout['workers']),'--dop',str(layout['dop']),
+        '--worker-memory-mib',str(layout['worker_memory_mib']),'--reserve-mib',str(layout['reserve_mib']),
+        '--evaluations',str(request.get('evaluations',1000000)),'--seconds',str(max(10,seconds-30)),
         '--task-seconds',str(min(1200,seconds)),'--max-decisions','12000','--lookahead-actions','12000',
         '--lookahead-floors','99','--alternatives','8','--survivors','2','--budget-ms','600000',
         '--boss-budget-ms','600000','--nodes','60000','--profile','Low',
         '--dispatch','ordered','--dispatch-window','56','--solver-seed','271828','--low-io','--event-driven-settle',
         '--checkpoint-mib','1024','--cache-mib','128','--archive-entries','256',
-        '--runtime-profile',profile['runtime_profile'],*extra]
+        '--runtime-profile',layout['runtime_profile'],*extra]
 
 def pause_compatible(folder):
     manifest=read(Path(folder)/'validation-manifest.json',{})or{}
@@ -256,6 +321,7 @@ def launch(payload,repo):
             raise RuntimeError('已验证的求解版本不可用。')
         from spire_exact.planning.pool import RUNTIME_PROFILES
         if profile.get('runtime_profile')not in RUNTIME_PROFILES:raise RuntimeError('运行时配置无效。')
+        layout=resolved_topology(request,profile)
         run_id='manual-'+datetime.datetime.now().strftime('%Y%m%d-%H%M%S')+'-'+uuid.uuid4().hex[:6]
         folder=manual_base()/run_id;folder.mkdir()
         from spire_exact.planning.io import write_json
@@ -268,13 +334,15 @@ def launch(payload,repo):
                   'pause_clock_validation':{'report_path':prepared['report_path'],
                       'source_version':prepared['source_version'],'host_sha256':prepared['host_sha256']},
                   'settings':solver_settings(request,profile),
-                  'workspace':str(workspace),'runtime_profile':profile['runtime_profile'],'old_prefixes_loaded':False,
+                  'workspace':str(workspace),'runtime_profile':layout['runtime_profile'],'old_prefixes_loaded':False,
+                  'topology':request.get('topology'),'workers':layout['workers'],'dop':layout['dop'],
+                  'worker_memory_mib':layout['worker_memory_mib'],'reserve_mib':layout['reserve_mib'],
                   'memory_protocol_override':'User authorized 16 GiB total; 14 GiB workload plus 2 GiB reserve',
                   'panel':'USER_INTERACTIVE','not_a_holdout_result':True}
         write_json(folder/'validation-manifest.json',manifest)
         register_manual_seed(ROOT,run_id,request['seed'],manifest['version'])
         write_json(folder/'manual-request.json',{**request,'wait_for':waits,'workspace':str(workspace),
-            'runtime_profile':profile['runtime_profile'],'settings':manifest['settings']})
+            'runtime_profile':layout['runtime_profile'],'settings':manifest['settings']})
         write_json(folder/'launch-state.json',{'phase':'queued'if waits else'starting'})
         python=str(Path(sys.executable).with_name('python.exe'))
         from tools.run_seed import spawn_detached

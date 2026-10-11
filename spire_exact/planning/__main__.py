@@ -367,7 +367,10 @@ def search_config(a,gates,probe_schedule,root_policies):
         route_prescribed=a.route_prescribed,route_top_n=a.route_top_n,route_archetypes=a.route_archetypes,
         route_strict=a.route_strict or a.strict_then_search,strict_then_search=a.strict_then_search,
         route_mode=a.route_mode,
-        route_workers=a.route_workers if a.route_workers else (detect_route_workers()
+        # The plugin's planner workers follow the main search's parallelism
+        # (workers x dop) when the entry sets it, and the machine otherwise.
+        route_workers=(a.route_workers if a.route_workers else
+            (a.workers * a.dop if a.workers else detect_route_workers())
             if (a.walker_walks or a.route_prescribed or a.route_strict) else 1),
         reuse_route_plan=a.reuse_route_plan)
 

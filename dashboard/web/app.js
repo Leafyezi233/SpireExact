@@ -177,7 +177,7 @@ $('launch-form').addEventListener('submit',async event=>{
  event.preventDefault();const button=$('launch-button'),message=$('launch-message');button.disabled=true;message.className='';message.textContent='正在提交…';
  try{
   const token=state.data?.launch?.token;if(!token)throw new Error('尚未连接后端，请稍后重试。');
-  const response=await fetch('/api/jobs',{method:'POST',headers:{'Content-Type':'application/json','X-SpireBoard-Token':token},body:JSON.stringify({seed:$('solve-seed').value.trim(),minutes:Number($('solve-minutes').value),dp:$('solve-dp').checked})});
+  const response=await fetch('/api/jobs',{method:'POST',headers:{'Content-Type':'application/json','X-SpireBoard-Token':token},body:JSON.stringify({seed:$('solve-seed').value.trim(),minutes:Number($('solve-minutes').value),dp:$('solve-dp').checked,topology:$('solve-topology').value,worker_memory_mib:Number($('solve-memory').value),evaluations:Number($('solve-evaluations').value)})});
   const result=await response.json();if(!response.ok)throw new Error(result.error||'启动失败');
   message.className='success';message.textContent=result.queued?'已加入队列，前一任务结束后自动开始。':'任务已提交，正在启动原生求解器。';
   history.replaceState(null,'',result.url);connect(result.run_id);switchTab('scalars');$('launch-dialog').close();toast(message.textContent);

@@ -1,3 +1,5 @@
+> **本仓库是 Leafyezi233 的优化版本（0.5.0-dp）**，在上游 i100 之上加入本地 DP 路线插件与 SpireBoard 运行拓扑预设；上游 i100 的设计与证据未改动。
+
 # SpireExact — i100 · 0.5.0-dp
 
 **给定一个 Slay the Spire 2 种子，在预算内搜索可完整重放的通关路线。** SpireExact 把地图、选牌、商店、休息和战斗接成整局搜索，从已执行的动作前缀不断尝试新的延续，用独立新进程的完整重放确认胜利。研究设置为 IRONCLAD / Ascension 10 / all unlocks / fresh start / mode1 全信息，允许利用种子决定的未来。

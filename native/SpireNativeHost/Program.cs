@@ -47,6 +47,11 @@ internal static class Program
     {
         if (args.Length == 1 && args[0] == "--worker")
         {
+            // The pool drives this process over redirected stdio and writes the
+            // request path as UTF-8. Console defaults to the OEM code page, so a
+            // non-ASCII path arrives mangled and File.ReadAllText fails with
+            // System.IO.IOException. Bind the reader to UTF-8 before reading.
+            if (Console.IsInputRedirected) Console.InputEncoding = new System.Text.UTF8Encoding(false);
             string? line;
             string oomResponse="SPIRE_WORKER_RESULT "+JsonSerializer.Serialize(new {
                 healthy=false,error="NATIVE_TASK_OUT_OF_MEMORY",error_kind="NATIVE_TASK_OUT_OF_MEMORY",

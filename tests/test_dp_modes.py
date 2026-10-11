@@ -239,6 +239,26 @@ class RouteWorkerTests(unittest.TestCase):
                                                     '--route-workers', '3'])
         self.assertEqual(search_config(dp, gates, probes, roots).route_workers, 3)
 
+    def test_route_workers_follows_the_main_loop_parallelism(self):
+        # The panel passes the topology as --workers/--dop, so the planner's
+        # worker count tracks the search's own parallelism instead of probing
+        # the machine again.
+        from spire_exact.planning.__main__ import search_config
+        _, dp, gates, probes, roots = planner_args(['--out', 'X:/t', '--route-mode',
+                                                    'force-then-search',
+                                                    '--workers', '3', '--dop', '2'])
+        self.assertEqual(search_config(dp, gates, probes, roots).route_workers, 6)
+        _, single, gates, probes, roots = planner_args(['--out', 'X:/t', '--route-mode',
+                                                       'force-then-search',
+                                                       '--workers', '7', '--dop', '1'])
+        self.assertEqual(search_config(single, gates, probes, roots).route_workers, 7)
+        # An explicit --route-workers still beats the derived value.
+        _, pinned, gates, probes, roots = planner_args(['--out', 'X:/t', '--route-mode',
+                                                       'force-then-search',
+                                                       '--workers', '3', '--dop', '2',
+                                                       '--route-workers', '1'])
+        self.assertEqual(search_config(pinned, gates, probes, roots).route_workers, 1)
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -45,6 +45,69 @@ class DashboardJobTests(unittest.TestCase):
         for flag in ('--clinic','--scheduler','--root-policies','--macro-plateau','--strategy-prior'):
             self.assertNotIn(flag,on)
 
+    def test_topology_presets_are_a_closed_set(self):
+        self.assertEqual(jobs.DEFAULT_TOPOLOGY,'3x2')
+        self.assertEqual(set(jobs.TOPOLOGIES),{'3x2','6x1','7x1','2x3'})
+        for name,row in jobs.TOPOLOGIES.items():
+            # A multi-threaded worker requires the legacy CLR runtime profile.
+            if row['dop']>1:self.assertEqual(row['runtime_profile'],'legacy',name)
+            self.assertIn(row['worker_memory_mib'],jobs.WORKER_MEMORY_CHOICES)
+        for bad in ('4x4','','3X2','3x2 ','8x1'):
+            with self.assertRaises(ValueError):jobs.validate({'seed':'42','topology':bad})
+        for bad in (0,512,2048+1,True,'1792'):
+            with self.assertRaises(ValueError):jobs.validate({'seed':'42','worker_memory_mib':bad})
+        for bad in (0,-1,1000001,True,'100'):
+            with self.assertRaises(ValueError):jobs.validate({'seed':'42','evaluations':bad})
+
+    def test_absent_settings_keep_the_recorded_shape(self):
+        # A caller that sends no topology must still get the historical argv,
+        # so old manifests and the recorded public recipe stay comparable.
+        request=jobs.validate({'seed':'42','minutes':45,'dp':False})
+        profile={'runtime_profile':'server-large-gen0','worker_memory_mib':1792,
+                 'solver_settings':['--scheduler','focus']}
+        args=jobs.solver_settings(request,profile)
+        self.assertEqual(args[args.index('--workers')+1],'7')
+        self.assertEqual(args[args.index('--dop')+1],'1')
+        self.assertEqual(args[args.index('--reserve-mib')+1],'1024')
+        self.assertEqual(args[args.index('--runtime-profile')+1],'server-large-gen0')
+        self.assertEqual(args[args.index('--worker-memory-mib')+1],'1792')
+        self.assertEqual(args[args.index('--evaluations')+1],'1000000')
+
+    def test_topology_and_memory_reach_the_launcher(self):
+        request=jobs.validate({'seed':'42','minutes':45,'dp':True,'topology':'2x3',
+                               'worker_memory_mib':1024,'evaluations':250000})
+        profile={'runtime_profile':'server-bounded-large-gen0','worker_memory_mib':1792,
+                 'solver_settings':[]}
+        args=jobs.solver_settings(request,profile)
+        self.assertEqual(args[args.index('--workers')+1],'2')
+        self.assertEqual(args[args.index('--dop')+1],'3')
+        self.assertEqual(args[args.index('--worker-memory-mib')+1],'1024')
+        self.assertEqual(args[args.index('--reserve-mib')+1],'1024')
+        self.assertEqual(args[args.index('--runtime-profile')+1],'legacy')
+        self.assertEqual(args[args.index('--evaluations')+1],'250000')
+        # The panel default is the multi-threaded 3x2 preset.
+        default=jobs.validate({'seed':'42','minutes':45,'topology':'3x2'})
+        args=jobs.solver_settings(default,profile)
+        self.assertEqual((args[args.index('--workers')+1],args[args.index('--dop')+1]),('3','2'))
+
+    def test_a_topology_preset_owns_the_runtime_profile_and_memory(self):
+        # Regression: solver-profile.json repeats --runtime-profile and
+        # --worker-memory-mib. argparse keeps the LAST occurrence, so appending
+        # the profile recipe after the layout turned a 3x2 launch into
+        # dop=2 + server-bounded-large-gen0 and tripped pool.py:88
+        # ('Experimental runtime profiles require solver DOP 1').
+        profile=json.loads((Path(__file__).resolve().parent.parent/'dashboard/solver-profile.json').read_text())
+        request=jobs.validate({'seed':'42','minutes':30,'dp':False,'topology':'3x2'})
+        args=jobs.solver_settings(request,profile)
+        self.assertEqual(args.count('--runtime-profile'),1)
+        self.assertEqual(args.count('--worker-memory-mib'),1)
+        self.assertEqual(args[args.index('--runtime-profile')+1],'legacy')
+        self.assertEqual(args[args.index('--dop')+1],'2')
+        # The recipe keeps its own copies of those two flags when no topology
+        # was requested, so recorded historical arguments stay byte-identical.
+        legacy=jobs.validate({'seed':'42','minutes':30,'dp':False})
+        self.assertEqual(jobs.solver_settings(legacy,profile).count('--runtime-profile'),2)
+
     def test_http_launch_requires_local_origin_and_session_token(self):
         http=server.ThreadingHTTPServer(('127.0.0.1',0),server.Handler)
         thread=threading.Thread(target=http.serve_forever,daemon=True);thread.start()

@@ -35,7 +35,10 @@ python dashboard/server.py --port 8765
 - 默认 30 分钟，支持 1–45 分钟。
 - IRONCLAD / Ascension 10 / all unlocks / fresh start / mode1 全信息。
 - **启用 DP 路线模式（默认勾选）**：走 DP 严格试算后再交还主搜索；取消勾选则使用完整 `--feature-profile i100`，设置来自 `final_defaults.py`。
-- 7 个 worker、有序派发窗口 56；标准资源为 8 个同类型逻辑 CPU、14 GiB Job 工作负载与 2 GiB 预留。
+- **运行拓扑**（默认 3×2）：`3x2` = 3 worker × 每 worker 2 线程（`dop=2`，`legacy` 运行时）；`6x1` = 6 worker 单线程、1024 MiB/worker；`7x1` = 上游公开配方；`2x3` = 2 worker × 3 线程。多线程档必须使用 `legacy` 运行时（`spire_exact/planning/pool.py:88`）。
+- **每 worker 内存**：1024 / 1536 / 1792（默认）/ 2048 MiB，可覆盖拓扑预设值。
+- **评估上限**：1–1000000，默认 1000000（即不限）。
+- 所有拓扑共用 8 个同类型逻辑 CPU、14 GiB Job 工作负载与 2 GiB 预留；DP 插件的 `--route-workers` 跟随主循环并行度（`workers × dop`）。
 - 资源准入必须满足请求的 worker 数，不满足时显示失败原因并保留记录。
 - 用户新作业独立登记，预算下的 UNKNOWN 保留为未知结果。
 
